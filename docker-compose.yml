@@ -1,4 +1,7 @@
 services:
+  # =========================
+  # KONG API GATEWAY
+  # =========================
   kong:
     image: kong:3.4
     container_name: kong
@@ -17,3 +20,146 @@ services:
       KONG_ADMIN_LISTEN: "0.0.0.0:8001"
     volumes:
       - ./kong.yml:/kong/kong.yml
+    depends_on:
+      - auth-service
+      - mvp-service
+    networks:
+      - backend
+
+  # =========================
+  # AUTH SERVICE
+  # =========================
+  auth-service:
+    image: auth-service:latest
+    container_name: auth-service
+    restart: unless-stopped
+    env_file:
+      - ./env/auth.env
+    volumes:
+      - ./keys/publicKey.pem:/etc/keys/publicKey.pem:ro
+      - ./keys/privateKey.pem:/etc/keys/privateKey.pem:ro
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    depends_on:
+      - auth-db
+      - auth-redis
+      - kafka
+    networks:
+      - backend
+
+  # PostgreSQL для auth
+  auth-db:
+    image: postgres:15
+    container_name: auth-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: auth_pass
+    ports:
+      - "5432:5432"
+    networks:
+      - backend
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+
+  # Redis для auth
+  auth-redis:
+    image: redis:7
+    container_name: auth-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    volumes:
+      - auth-redis-data:/data
+
+  # Kafka (для auth)
+  zookeeper:
+    image: bitnami/zookeeper:3.8
+    container_name: zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports:
+      - "2181:2181"
+    networks:
+      - backend
+
+  kafka:
+    image: bitnami/kafka:3.5
+    container_name: kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    networks:
+      - backend
+
+  # =========================
+  # MVP SERVICE
+  # =========================
+  main-service:
+    image: main-service:latest # твой образ mvp-service
+    container_name: main-service
+    restart: unless-stopped
+    env_file:
+      - ./env/main.env # env vars для mvp (DB, Redis)
+    ports:
+      - "3000:3000"
+    depends_on:
+      - main-db
+      - main-redis
+    networks:
+      - backend
+
+  # PostgreSQL для mvp
+  main-db:
+    image: postgres:15
+    container_name: main-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: main_db
+      POSTGRES_USER: main_user
+      POSTGRES_PASSWORD: main_pass
+    ports:
+      - "5433:5432"
+    networks:
+      - backend
+    volumes:
+      - main-db-data:/var/lib/postgresql/data
+
+  # Redis для mvp
+  main-redis:
+    image: redis:7
+    container_name: main-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    networks:
+      - backend
+    volumes:
+      - mvp-redis-data:/data
+
+# =========================
+# VOLUMES
+# =========================
+volumes:
+  auth-db-data:
+  auth-redis-data:
+  main-db-data:
+  main-redis-data:
+
+# =========================
+# NETWORKS
+# =========================
+networks:
+  backend:
+    driver: bridge
