@@ -1,28 +1,20 @@
 services:
   # =========================
-  # KONG API GATEWAY
+  # TRAEFIK API GATEWAY
   # =========================
-  kong:
-    image: kong:3.4
-    container_name: kong
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
     restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
     ports:
-      - "8000:8000" # HTTP
-      - "8443:8443" # HTTPS
-      - "8001:8001" # Admin API
-    environment:
-      KONG_DATABASE: "off" # DB-less режим
-      KONG_DECLARATIVE_CONFIG: "/kong/kong.yml"
-      KONG_PROXY_ACCESS_LOG: "/dev/stdout"
-      KONG_ADMIN_ACCESS_LOG: "/dev/stdout"
-      KONG_PROXY_ERROR_LOG: "/dev/stderr"
-      KONG_ADMIN_ERROR_LOG: "/dev/stderr"
-      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      - "80:80"
+      - "8081:8080" # dashboard
     volumes:
-      - ./kong.yml:/kong/kong.yml
-    depends_on:
-      - auth-service
-      - mvp-service
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - backend
 
@@ -30,7 +22,7 @@ services:
   # AUTH SERVICE
   # =========================
   auth-service:
-    image: auth-service:latest
+    image: ghcr.io/atlas-lang-tech/back--auth-service:sha-1bfc0ab
     container_name: auth-service
     restart: unless-stopped
     env_file:
@@ -76,7 +68,9 @@ services:
     volumes:
       - auth-redis-data:/data
 
-  # Kafka (для auth)
+  # =========================
+  # KAFKA
+  # =========================
   zookeeper:
     image: bitnami/zookeeper:3.8
     container_name: zookeeper
@@ -104,23 +98,57 @@ services:
       - backend
 
   # =========================
-  # MVP SERVICE
+  # MAIN SERVICE (API)
   # =========================
   main-service:
-    image: main-service:latest # твой образ mvp-service
+    image: ghcr.io/atlas-lang-tech/back--main-service:sha-089df0f
     container_name: main-service
     restart: unless-stopped
     env_file:
-      - ./env/main.env # env vars для mvp (DB, Redis)
-    ports:
-      - "3000:3000"
+      - ./env/main.env
     depends_on:
       - main-db
       - main-redis
     networks:
       - backend
 
-  # PostgreSQL для mvp
+    labels:
+      - "traefik.enable=true"
+
+      # =========================
+      # STRIP PREFIX
+      # =========================
+      - "traefik.http.middlewares.main-strip.stripprefix.prefixes=/api/course"
+
+      # =========================
+      # PUBLIC
+      # =========================
+      - "traefik.http.routers.main-public.rule=PathPrefix(`/api/course/public`)"
+      - "traefik.http.routers.main-public.entrypoints=web"
+      - "traefik.http.routers.main-public.middlewares=main-strip"
+      - "traefik.http.routers.main-public.service=main-service"
+      - "traefik.http.routers.main-public.priority=5"
+
+      # =========================
+      # PRIVATE (с auth)
+      # =========================
+      - "traefik.http.routers.main-private.rule=PathPrefix(`/api/course/private`)"
+      - "traefik.http.routers.main-private.entrypoints=web"
+      - "traefik.http.routers.main-private.middlewares=main-strip,auth"
+      - "traefik.http.routers.main-private.service=main-service"
+      - "traefik.http.routers.main-private.priority=10"
+
+      # =========================
+      # FORWARDAUTH
+      # =========================
+      - "traefik.http.middlewares.auth.forwardauth.address=http://auth-service:8080/verify"
+      - "traefik.http.middlewares.auth.forwardauth.trustForwardHeader=true"
+
+      # =========================
+      # SERVICE PORT
+      # =========================
+      - "traefik.http.services.main-service.loadbalancer.server.port=3000"
+  # PostgreSQL для main
   main-db:
     image: postgres:15
     container_name: main-db
@@ -136,7 +164,7 @@ services:
     volumes:
       - main-db-data:/var/lib/postgresql/data
 
-  # Redis для mvp
+  # Redis для main
   main-redis:
     image: redis:7
     container_name: main-redis
@@ -146,7 +174,7 @@ services:
     networks:
       - backend
     volumes:
-      - mvp-redis-data:/data
+      - main-redis-data:/data
 
 # =========================
 # VOLUMES
