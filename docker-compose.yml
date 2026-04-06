@@ -9,10 +9,11 @@ services:
     command:
       - "--api.insecure=true"
       - "--providers.docker=true"
+      - "--providers.docker.network=back--api-getaway_backend"
       - "--entrypoints.web.address=:80"
     ports:
       - "80:80"
-      - "8081:8080" # dashboard
+      - "8081:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -22,7 +23,7 @@ services:
   # AUTH SERVICE
   # =========================
   auth-service:
-    image: ghcr.io/atlas-lang-tech/back--auth-service:sha-1bfc0ab
+    image: ghcr.io/atlas-lang-tech/back--auth-service:prod
     container_name: auth-service
     restart: unless-stopped
     env_file:
@@ -36,9 +37,14 @@ services:
     depends_on:
       - auth-db
       - auth-redis
-      - kafka
     networks:
       - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.rule=PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.auth.entrypoints=web"
+      - "traefik.http.routers.auth.service=auth-service"
+      - "traefik.http.services.auth-service.loadbalancer.server.port=8080"
 
   # PostgreSQL для auth
   auth-db:
@@ -69,39 +75,10 @@ services:
       - auth-redis-data:/data
 
   # =========================
-  # KAFKA
-  # =========================
-  zookeeper:
-    image: bitnami/zookeeper:3.8
-    container_name: zookeeper
-    environment:
-      ALLOW_ANONYMOUS_LOGIN: "yes"
-    ports:
-      - "2181:2181"
-    networks:
-      - backend
-
-  kafka:
-    image: bitnami/kafka:3.5
-    container_name: kafka
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      ALLOW_PLAINTEXT_LISTENER: "yes"
-    ports:
-      - "9092:9092"
-    depends_on:
-      - zookeeper
-    networks:
-      - backend
-
-  # =========================
   # MAIN SERVICE (API)
   # =========================
   main-service:
-    image: ghcr.io/atlas-lang-tech/back--main-service:sha-089df0f
+    image: ghcr.io/atlas-lang-tech/back--main-service:prod
     container_name: main-service
     restart: unless-stopped
     env_file:
@@ -111,43 +88,29 @@ services:
       - main-redis
     networks:
       - backend
-
     labels:
       - "traefik.enable=true"
 
-      # =========================
-      # STRIP PREFIX
-      # =========================
-      - "traefik.http.middlewares.main-strip.stripprefix.prefixes=/api/course"
-
-      # =========================
       # PUBLIC
-      # =========================
       - "traefik.http.routers.main-public.rule=PathPrefix(`/api/course/public`)"
       - "traefik.http.routers.main-public.entrypoints=web"
-      - "traefik.http.routers.main-public.middlewares=main-strip"
       - "traefik.http.routers.main-public.service=main-service"
       - "traefik.http.routers.main-public.priority=5"
 
-      # =========================
       # PRIVATE (с auth)
-      # =========================
       - "traefik.http.routers.main-private.rule=PathPrefix(`/api/course/private`)"
       - "traefik.http.routers.main-private.entrypoints=web"
-      - "traefik.http.routers.main-private.middlewares=main-strip,auth"
+      - "traefik.http.routers.main-private.middlewares=auth-forward"
       - "traefik.http.routers.main-private.service=main-service"
       - "traefik.http.routers.main-private.priority=10"
 
-      # =========================
       # FORWARDAUTH
-      # =========================
-      - "traefik.http.middlewares.auth.forwardauth.address=http://auth-service:8080/verify"
-      - "traefik.http.middlewares.auth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify"
+      - "traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true"
 
-      # =========================
       # SERVICE PORT
-      # =========================
       - "traefik.http.services.main-service.loadbalancer.server.port=3000"
+
   # PostgreSQL для main
   main-db:
     image: postgres:15
