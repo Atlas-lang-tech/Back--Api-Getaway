@@ -7,17 +7,23 @@ services:
     container_name: traefik
     restart: unless-stopped
     command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.network=back--api-getaway_backend"
-      - "--entrypoints.web.address=:80"
+      - '--api.insecure=true'
+      - '--providers.docker=true'
+      - '--providers.docker.network=back--api-getaway_backend'
+      - '--entrypoints.web.address=:80'
     ports:
-      - "80:80"
-      - "8081:8080"
+      - '80:80'
+      - '8081:8080'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - backend
+    labels:
+      - 'traefik.http.middlewares.cors.headers.accesscontrolalloworiginlist=http://localhost:5173'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolallowheaders=Content-Type,Authorization'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolmaxage=100'
+      - 'traefik.http.middlewares.cors.headers.addvaryheader=true'
 
   # =========================
   # AUTH SERVICE
@@ -32,19 +38,20 @@ services:
       - ./keys/publicKey.pem:/etc/keys/publicKey.pem:ro
       - ./keys/privateKey.pem:/etc/keys/privateKey.pem:ro
     ports:
-      - "8080:8080"
-      - "9000:9000"
+      - '8080:8080'
+      - '9000:9000'
     depends_on:
       - auth-db
       - auth-redis
     networks:
       - backend
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.auth.rule=PathPrefix(`/api/auth`)"
-      - "traefik.http.routers.auth.entrypoints=web"
-      - "traefik.http.routers.auth.service=auth-service"
-      - "traefik.http.services.auth-service.loadbalancer.server.port=8080"
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.auth.rule=PathPrefix(`/api/auth`)'
+      - 'traefik.http.routers.auth.entrypoints=web'
+      - 'traefik.http.routers.auth.service=auth-service'
+      - 'traefik.http.routers.auth.middlewares=cors'
+      - 'traefik.http.services.auth-service.loadbalancer.server.port=8080'
 
   # PostgreSQL для auth
   auth-db:
@@ -56,7 +63,7 @@ services:
       POSTGRES_USER: auth_user
       POSTGRES_PASSWORD: auth_pass
     ports:
-      - "5432:5432"
+      - '5432:5432'
     networks:
       - backend
     volumes:
@@ -68,7 +75,7 @@ services:
     container_name: auth-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - '6379:6379'
     networks:
       - backend
     volumes:
@@ -89,27 +96,28 @@ services:
     networks:
       - backend
     labels:
-      - "traefik.enable=true"
+      - 'traefik.enable=true'
 
       # PUBLIC
-      - "traefik.http.routers.main-public.rule=PathPrefix(`/api/course/public`)"
-      - "traefik.http.routers.main-public.entrypoints=web"
-      - "traefik.http.routers.main-public.service=main-service"
-      - "traefik.http.routers.main-public.priority=5"
+      - 'traefik.http.routers.main-public.rule=PathPrefix(`/api/course/public`)'
+      - 'traefik.http.routers.main-public.entrypoints=web'
+      - 'traefik.http.routers.main-public.service=main-service'
+      - 'traefik.http.routers.main-public.middlewares=cors'
+      - 'traefik.http.routers.main-public.priority=5'
 
       # PRIVATE (с auth)
-      - "traefik.http.routers.main-private.rule=PathPrefix(`/api/course/private`)"
-      - "traefik.http.routers.main-private.entrypoints=web"
-      - "traefik.http.routers.main-private.middlewares=auth-forward"
-      - "traefik.http.routers.main-private.service=main-service"
-      - "traefik.http.routers.main-private.priority=10"
+      - 'traefik.http.routers.main-private.rule=PathPrefix(`/api/course/private`)'
+      - 'traefik.http.routers.main-private.entrypoints=web'
+      - 'traefik.http.routers.main-private.middlewares=cors, auth-forward'
+      - 'traefik.http.routers.main-private.service=main-service'
+      - 'traefik.http.routers.main-private.priority=10'
 
       # FORWARDAUTH
-      - "traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify"
-      - "traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true"
+      - 'traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify'
+      - 'traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true'
 
       # SERVICE PORT
-      - "traefik.http.services.main-service.loadbalancer.server.port=3000"
+      - 'traefik.http.services.main-service.loadbalancer.server.port=3000'
 
   # PostgreSQL для main
   main-db:
@@ -121,7 +129,7 @@ services:
       POSTGRES_USER: main_user
       POSTGRES_PASSWORD: main_pass
     ports:
-      - "5433:5432"
+      - '5433:5432'
     networks:
       - backend
     volumes:
@@ -133,7 +141,7 @@ services:
     container_name: main-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - '6380:6379'
     networks:
       - backend
     volumes:
