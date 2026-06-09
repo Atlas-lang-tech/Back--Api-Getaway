@@ -19,10 +19,13 @@ services:
     networks:
       - backend
     labels:
+      # --- CORS middleware ---
       - 'traefik.http.middlewares.cors.headers.accesscontrolalloworiginlist=http://localhost:5173'
-      - 'traefik.http.middlewares.cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS,PATCH'
       - 'traefik.http.middlewares.cors.headers.accesscontrolallowheaders=Content-Type,Authorization'
-      - 'traefik.http.middlewares.cors.headers.accesscontrolmaxage=100'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolexposeheaders=Set-Cookie'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolmaxage=3600'
+      - 'traefik.http.middlewares.cors.headers.accesscontrolallowcredentials=true'
       - 'traefik.http.middlewares.cors.headers.addvaryheader=true'
 
   # =========================
@@ -37,6 +40,7 @@ services:
     volumes:
       - ./keys/publicKey.pem:/etc/keys/publicKey.pem:ro
       - ./keys/privateKey.pem:/etc/keys/privateKey.pem:ro
+    # Порти відкриті лише для дебагу — в продакшні прибери
     ports:
       - '8080:8080'
       - '9000:9000'
@@ -49,9 +53,9 @@ services:
       - 'traefik.enable=true'
       - 'traefik.http.routers.auth.rule=PathPrefix(`/api/auth`)'
       - 'traefik.http.routers.auth.entrypoints=web'
-      - 'traefik.http.routers.auth.service=auth-service'
+      - 'traefik.http.routers.auth.service=auth-svc'
       - 'traefik.http.routers.auth.middlewares=cors'
-      - 'traefik.http.services.auth-service.loadbalancer.server.port=8080'
+      - 'traefik.http.services.auth-svc.loadbalancer.server.port=8080'
 
   # PostgreSQL для auth
   auth-db:
@@ -98,26 +102,29 @@ services:
     labels:
       - 'traefik.enable=true'
 
-      # PUBLIC
+      # PUBLIC (без авторизації)
       - 'traefik.http.routers.main-public.rule=PathPrefix(`/api/course/public`)'
       - 'traefik.http.routers.main-public.entrypoints=web'
-      - 'traefik.http.routers.main-public.service=main-service'
+      - 'traefik.http.routers.main-public.service=main-svc'
       - 'traefik.http.routers.main-public.middlewares=cors'
       - 'traefik.http.routers.main-public.priority=5'
 
-      # PRIVATE (с auth)
+      # PRIVATE (з ForwardAuth)
       - 'traefik.http.routers.main-private.rule=PathPrefix(`/api/course/private`)'
       - 'traefik.http.routers.main-private.entrypoints=web'
-      - 'traefik.http.routers.main-private.middlewares=cors, auth-forward'
-      - 'traefik.http.routers.main-private.service=main-service'
+      # ВАЖЛИВО: cors завжди першим, потім auth-forward
+      - 'traefik.http.routers.main-private.middlewares=cors,auth-forward'
+      - 'traefik.http.routers.main-private.service=main-svc'
       - 'traefik.http.routers.main-private.priority=10'
 
-      # FORWARDAUTH
+      # ForwardAuth middleware — перевірка токену через auth-service
       - 'traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify'
       - 'traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true'
+      # Пробрасуємо заголовки від auth-service до main-service
+      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role'
 
       # SERVICE PORT
-      - 'traefik.http.services.main-service.loadbalancer.server.port=3000'
+      - 'traefik.http.services.main-svc.loadbalancer.server.port=3000'
 
   # PostgreSQL для main
   main-db:
