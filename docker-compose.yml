@@ -28,6 +28,11 @@ services:
       - 'traefik.http.middlewares.cors.headers.accesscontrolallowcredentials=true'
       - 'traefik.http.middlewares.cors.headers.addvaryheader=true'
 
+      # --- ForwardAuth middleware (визначений один раз, спільний для всіх сервісів) ---
+      - 'traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify'
+      - 'traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true'
+      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role'
+
   # =========================
   # AUTH SERVICE
   # =========================
@@ -117,12 +122,6 @@ services:
       - 'traefik.http.routers.main-private.service=main-svc'
       - 'traefik.http.routers.main-private.priority=10'
 
-      # ForwardAuth middleware — перевірка токену через auth-service
-      - 'traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify'
-      - 'traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true'
-      # Пробрасуємо заголовки від auth-service до main-service
-      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role'
-
       # SERVICE PORT
       - 'traefik.http.services.main-svc.loadbalancer.server.port=3000'
 
@@ -154,6 +153,69 @@ services:
     volumes:
       - main-redis-data:/data
 
+  # =========================
+  # VOCABULARY SERVICE (API)
+  # =========================
+  vocabulary-service:
+    image: ghcr.io/atlas-lang-tech/back--vocabulary-service:prod
+    container_name: vocabulary-service
+    restart: unless-stopped
+    env_file:
+      - ./env/vocabulary.env
+    depends_on:
+      - vocabulary-db
+      - vocabulary-redis
+    networks:
+      - backend
+    labels:
+      - 'traefik.enable=true'
+
+      # PUBLIC (без авторизації)
+      - 'traefik.http.routers.vocabulary-public.rule=PathPrefix(`/api/vocabulary/public`)'
+      - 'traefik.http.routers.vocabulary-public.entrypoints=web'
+      - 'traefik.http.routers.vocabulary-public.service=vocabulary-svc'
+      - 'traefik.http.routers.vocabulary-public.middlewares=cors'
+      - 'traefik.http.routers.vocabulary-public.priority=5'
+
+      # PRIVATE (з ForwardAuth)
+      - 'traefik.http.routers.vocabulary-private.rule=PathPrefix(`/api/vocabulary/private`)'
+      - 'traefik.http.routers.vocabulary-private.entrypoints=web'
+      # ВАЖЛИВО: cors завжди першим, потім auth-forward
+      - 'traefik.http.routers.vocabulary-private.middlewares=cors,auth-forward'
+      - 'traefik.http.routers.vocabulary-private.service=vocabulary-svc'
+      - 'traefik.http.routers.vocabulary-private.priority=10'
+
+      # SERVICE PORT
+      - 'traefik.http.services.vocabulary-svc.loadbalancer.server.port=3000'
+
+  # PostgreSQL для vocabulary
+  vocabulary-db:
+    image: postgres:15
+    container_name: vocabulary-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vocabulary_db
+      POSTGRES_USER: vocabulary_user
+      POSTGRES_PASSWORD: vocabulary_pass
+    ports:
+      - '5434:5432'
+    networks:
+      - backend
+    volumes:
+      - vocabulary-db-data:/var/lib/postgresql/data
+
+  # Redis для vocabulary
+  vocabulary-redis:
+    image: redis:7
+    container_name: vocabulary-redis
+    restart: unless-stopped
+    ports:
+      - '6381:6379'
+    networks:
+      - backend
+    volumes:
+      - vocabulary-redis-data:/data
+
 # =========================
 # VOLUMES
 # =========================
@@ -162,6 +224,8 @@ volumes:
   auth-redis-data:
   main-db-data:
   main-redis-data:
+  vocabulary-db-data:
+  vocabulary-redis-data:
 
 # =========================
 # NETWORKS
