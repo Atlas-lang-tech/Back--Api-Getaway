@@ -31,7 +31,30 @@ services:
       # --- ForwardAuth middleware (визначений один раз, спільний для всіх сервісів) ---
       - 'traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify'
       - 'traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true'
-      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role'
+      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role,X-User-Plan'
+
+  # =========================
+  # RABBITMQ (shared atlas.events bus)
+  # =========================
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    networks:
+      - backend
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # =========================
   # AUTH SERVICE
@@ -50,8 +73,12 @@ services:
       - '8080:8080'
       - '9000:9000'
     depends_on:
-      - auth-db
-      - auth-redis
+      auth-db:
+        condition: service_healthy
+      auth-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - backend
     labels:
@@ -77,6 +104,11 @@ services:
       - backend
     volumes:
       - auth-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U auth_user -d auth_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Redis для auth
   auth-redis:
@@ -89,6 +121,11 @@ services:
       - backend
     volumes:
       - auth-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # =========================
   # MAIN SERVICE (API)
@@ -100,8 +137,12 @@ services:
     env_file:
       - ./env/main.env
     depends_on:
-      - main-db
-      - main-redis
+      main-db:
+        condition: service_healthy
+      main-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - backend
     labels:
@@ -140,6 +181,11 @@ services:
       - backend
     volumes:
       - main-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U main_user -d main_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Redis для main
   main-redis:
@@ -152,6 +198,11 @@ services:
       - backend
     volumes:
       - main-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # =========================
   # VOCABULARY SERVICE (API)
@@ -163,8 +214,12 @@ services:
     env_file:
       - ./env/vocabulary.env
     depends_on:
-      - vocabulary-db
-      - vocabulary-redis
+      vocabulary-db:
+        condition: service_healthy
+      vocabulary-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - backend
     labels:
@@ -203,6 +258,11 @@ services:
       - backend
     volumes:
       - vocabulary-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U vocabulary_user -d vocabulary_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Redis для vocabulary
   vocabulary-redis:
@@ -215,6 +275,95 @@ services:
       - backend
     volumes:
       - vocabulary-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =========================
+  # BILLING SERVICE (API)
+  # =========================
+  billing-service:
+    image: ghcr.io/atlas-lang-tech/back--billing-service:prod
+    container_name: billing-service
+    restart: unless-stopped
+    env_file:
+      - ./env/billing.env
+    depends_on:
+      billing-db:
+        condition: service_healthy
+      billing-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+    labels:
+      - 'traefik.enable=true'
+
+      # PUBLIC (без авторизації)
+      - 'traefik.http.routers.billing-public.rule=PathPrefix(`/api/billing/public`)'
+      - 'traefik.http.routers.billing-public.entrypoints=web'
+      - 'traefik.http.routers.billing-public.service=billing-svc'
+      - 'traefik.http.routers.billing-public.middlewares=cors'
+      - 'traefik.http.routers.billing-public.priority=5'
+
+      # DOCS (Swagger, dev) — без авторизації
+      - 'traefik.http.routers.billing-docs.rule=PathPrefix(`/api/billing/docs`)'
+      - 'traefik.http.routers.billing-docs.entrypoints=web'
+      - 'traefik.http.routers.billing-docs.service=billing-svc'
+      - 'traefik.http.routers.billing-docs.middlewares=cors'
+      - 'traefik.http.routers.billing-docs.priority=8'
+
+      # PRIVATE (з ForwardAuth)
+      - 'traefik.http.routers.billing-private.rule=PathPrefix(`/api/billing/private`)'
+      - 'traefik.http.routers.billing-private.entrypoints=web'
+      # ВАЖЛИВО: cors завжди першим, потім auth-forward
+      - 'traefik.http.routers.billing-private.middlewares=cors,auth-forward'
+      - 'traefik.http.routers.billing-private.service=billing-svc'
+      - 'traefik.http.routers.billing-private.priority=10'
+
+      # SERVICE PORT
+      - 'traefik.http.services.billing-svc.loadbalancer.server.port=3000'
+
+  # PostgreSQL для billing
+  billing-db:
+    image: postgres:15
+    container_name: billing-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: billing_db
+      POSTGRES_USER: billing_user
+      POSTGRES_PASSWORD: billing_pass
+    ports:
+      - '5435:5432'
+    networks:
+      - backend
+    volumes:
+      - billing-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U billing_user -d billing_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis для billing
+  billing-redis:
+    image: redis:7
+    container_name: billing-redis
+    restart: unless-stopped
+    ports:
+      - '6382:6379'
+    networks:
+      - backend
+    volumes:
+      - billing-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 # =========================
 # VOLUMES
@@ -226,6 +375,9 @@ volumes:
   main-redis-data:
   vocabulary-db-data:
   vocabulary-redis-data:
+  billing-db-data:
+  billing-redis-data:
+  rabbitmq-data:
 
 # =========================
 # NETWORKS
