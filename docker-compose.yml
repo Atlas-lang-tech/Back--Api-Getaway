@@ -31,7 +31,7 @@ services:
       # --- ForwardAuth middleware (визначений один раз, спільний для всіх сервісів) ---
       - 'traefik.http.middlewares.auth-forward.forwardauth.address=http://auth-service:8080/verify'
       - 'traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true'
-      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role,X-User-Plan'
+      - 'traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Role,X-User-Plan,X-User-Email'
 
   # =========================
   # RABBITMQ (shared atlas.events bus)
@@ -365,6 +365,66 @@ services:
       timeout: 5s
       retries: 5
 
+  # =========================
+  # MAIL SERVICE (event-driven, без публічних REST-роутів)
+  # =========================
+  # Сервіс споживає події з atlas.events і шле листи через Resend.
+  # Зовнішніх ендпоінтів немає (лише GET /api/mail/health), тому Traefik-роутери
+  # та auth-forward йому не потрібні — достатньо бути в мережі backend.
+  mail-service:
+    image: ghcr.io/atlas-lang-tech/back--mail-service:prod
+    container_name: mail-service
+    restart: unless-stopped
+    env_file:
+      - ./env/mail.env
+    depends_on:
+      mail-db:
+        condition: service_healthy
+      mail-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # PostgreSQL для mail (аудит відправлень — таблиця mail_logs)
+  mail-db:
+    image: postgres:15
+    container_name: mail-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mail_db
+      POSTGRES_USER: mail_user
+      POSTGRES_PASSWORD: mail_pass
+    ports:
+      - '5436:5432'
+    networks:
+      - backend
+    volumes:
+      - mail-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mail_user -d mail_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis для mail (ідемпотентність eventId + BullMQ-черга)
+  mail-redis:
+    image: redis:7
+    container_name: mail-redis
+    restart: unless-stopped
+    ports:
+      - '6383:6379'
+    networks:
+      - backend
+    volumes:
+      - mail-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 # =========================
 # VOLUMES
 # =========================
@@ -377,6 +437,8 @@ volumes:
   vocabulary-redis-data:
   billing-db-data:
   billing-redis-data:
+  mail-db-data:
+  mail-redis-data:
   rabbitmq-data:
 
 # =========================
