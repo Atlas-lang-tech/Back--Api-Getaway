@@ -372,6 +372,11 @@ services:
   # Зовнішніх ендпоінтів немає (лише GET /api/mail/health), тому Traefik-роутери
   # та auth-forward йому не потрібні — достатньо бути в мережі backend.
   mail-service:
+    # Поки prod-образ не перевипущений CI з виправленим prisma.config.ts і
+    # початковою міграцією — збираємо локально з сорсів сервісу.
+    build:
+      context: ../back--mail-service
+      dockerfile: Dockerfile
     image: ghcr.io/atlas-lang-tech/back--mail-service:prod
     container_name: mail-service
     restart: unless-stopped
