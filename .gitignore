@@ -1,0 +1,5 @@
+env/*.env
+keys/*.pem
+.DS_Store
+EOF
+
